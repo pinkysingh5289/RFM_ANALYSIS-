@@ -127,3 +127,77 @@ SELECT
 FROM rfm_base
 ORDER BY monetary DESC
 LIMIT 20;
+
+
+--  Combine R, F, M scores into named segments
+
+WITH recency_cte AS (
+    SELECT 
+        c.customer_unique_id,
+        DATEDIFF(
+            (SELECT MAX(order_purchase_timestamp) FROM olist_orders_clean), 
+            MAX(o.order_purchase_timestamp)
+        ) AS recency_days
+    FROM olist_orders_clean o
+    JOIN olist_customers c ON o.customer_id = c.customer_id
+    GROUP BY c.customer_unique_id
+),
+frequency_cte AS (
+    SELECT 
+        c.customer_unique_id,
+        COUNT(DISTINCT o.order_id) AS frequency
+    FROM olist_orders_clean o
+    JOIN olist_customers c ON o.customer_id = c.customer_id
+    GROUP BY c.customer_unique_id
+),
+monetary_cte AS (
+    SELECT 
+        c.customer_unique_id,
+        SUM(p.payment_value) AS monetary
+    FROM olist_orders_clean o
+    JOIN olist_customers c ON o.customer_id = c.customer_id
+    JOIN olist_order_payments p ON o.order_id = p.order_id
+    GROUP BY c.customer_unique_id
+),
+rfm_base AS (
+    SELECT 
+        r.customer_unique_id,
+        r.recency_days,
+        f.frequency,
+        m.monetary
+    FROM recency_cte r
+    JOIN frequency_cte f ON r.customer_unique_id = f.customer_unique_id
+    JOIN monetary_cte m ON r.customer_unique_id = m.customer_unique_id
+),
+rfm_scores AS (
+    SELECT 
+        customer_unique_id,
+        recency_days,
+        frequency,
+        monetary,
+        NTILE(5) OVER (ORDER BY recency_days DESC) AS r_score,
+        NTILE(5) OVER (ORDER BY frequency ASC) AS f_score,
+        NTILE(5) OVER (ORDER BY monetary ASC) AS m_score
+    FROM rfm_base
+)
+SELECT 
+    customer_unique_id,
+    recency_days,
+    frequency,
+    monetary,
+    r_score,
+    f_score,
+    m_score,
+    CASE
+        WHEN r_score >= 4 AND f_score >= 4 AND m_score >= 4 THEN 'Champions'
+        WHEN r_score >= 3 AND f_score >= 3 THEN 'Loyal Customers'
+        WHEN r_score >= 4 AND f_score <= 2 THEN 'New/Promising'
+        WHEN r_score <= 2 AND f_score >= 4 THEN 'At Risk'
+        WHEN r_score <= 2 AND f_score <= 2 AND m_score <= 2 THEN 'Lost'
+        ELSE 'Others'
+    END AS segment
+FROM rfm_scores
+ORDER BY monetary DESC
+LIMIT 30;
+
+
